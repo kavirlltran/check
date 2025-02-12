@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kiểm Tra Phát Âm với OpenAI Whisper</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      text-align: center;
+    }
+    .sentence-container {
+      margin-bottom: 30px;
+      border: 1px solid #ccc;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .sentence {
+      font-size: 1.2em;
+      margin-bottom: 10px;
+    }
+    .result {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+    button {
+      padding: 10px 15px;
+      font-size: 1em;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Kiểm Tra Phát Âm (OpenAI Whisper)</h1>
+  <p>
+    Hãy đọc to các câu sau. Các từ có dấu <code>'</code> (hoặc <code>‘</code>) đánh dấu trọng âm.
+    Nhấn nút <strong>Record</strong> để ghi âm và kiểm tra phát âm của bạn.
+  </p>
+  
+  <div id="sentences"></div>
+  
+  <script>
+    // Khai báo biến toàn cục cho luồng âm thanh và lưu các MediaRecorder theo từng câu
+    let audioStream = null;
+    const recorders = {};
+
+    // Yêu cầu quyền truy cập microphone khi tải trang
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        audioStream = stream;
+      })
+      .catch(err => {
+        alert("Không thể truy cập microphone: " + err.message);
+      });
+
+    // Mảng các câu (các dấu ' hoặc ‘ đánh dấu trọng âm)
+    const sentences = [
+      "We should ‘finish the ‘project for our ‘history ‘class",
+      "‘Peter is re‘vising for his e‘xam ‘next ‘week.",
+      "‘Students will ‘spend more ‘time ‘working with ‘other ‘classmates.",
+      "I ‘like to ‘watch ‘videos that ‘help me ‘learn ‘new ‘things",
+      "I have ‘installed some ‘apps on my ‘phone"
+    ];
+
+    // Hàm loại bỏ dấu trọng âm (dấu ' hoặc ‘ ’)
+    function removeStressMarkers(text) {
+      return text.replace(/['‘’]/g, "");
+    }
+
+    const sentencesDiv = document.getElementById("sentences");
+
+    sentences.forEach((sentence, index) => {
+      // Tạo container cho từng câu
+      const container = document.createElement("div");
+      container.className = "sentence-container";
+      container.id = "sentence-container-" + index;
+      
+      // Hiển thị câu
+      const sentenceEl = document.createElement("div");
+      sentenceEl.className = "sentence";
+      sentenceEl.textContent = sentence;
+      container.appendChild(sentenceEl);
+      
+      // Nút ghi âm
+      const recordBtn = document.createElement("button");
+      recordBtn.textContent = "Record";
+      recordBtn.id = "record-btn-" + index;
+      container.appendChild(recordBtn);
+      
+      // Vùng hiển thị kết quả
+      const resultDiv = document.createElement("div");
+      resultDiv.className = "result";
+      resultDiv.id = "result-" + index;
+      container.appendChild(resultDiv);
+      
+      sentencesDiv.appendChild(container);
+      
+      // Sự kiện cho nút ghi âm
+      recordBtn.addEventListener("click", () => {
+        if (recordBtn.textContent === "Record") {
+          startRecording(index, sentence, recordBtn, resultDiv);
+        } else {
+          stopRecording(index, recordBtn);
+        }
+      });
+    });
+
+    // Hàm bắt đầu ghi âm
+    function startRecording(index, sentence, recordBtn, resultDiv) {
+      if (!audioStream) {
+        resultDiv.textContent = "Không có luồng âm thanh.";
+        return;
+      }
+      const recorder = new MediaRecorder(audioStream);
+      const audioChunks = [];
+      recorder.ondataavailable = event => {
+        audioChunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+        resultDiv.textContent = "Đang chuyển đổi giọng nói...";
+        transcribeAudio(audioBlob, index, sentence, recordBtn, resultDiv);
+      };
+      recorders[index] = recorder;
+      recorder.start();
+      recordBtn.textContent = "Stop";
+      resultDiv.textContent = "Đang ghi âm...";
+    }
+
+    // Hàm dừng ghi âm
+    function stopRecording(index, recordBtn) {
+      if (recorders[index]) {
+        recorders[index].stop();
+        recordBtn.textContent = "Record";
+      }
+    }
+
+    // Hàm chuyển đổi audioBlob thành chuỗi base64 và gửi đến API Whisper
+    function transcribeAudio(audioBlob, index, sentence, recordBtn, resultDiv) {
+      const reader = new FileReader();
+      reader.onloadend = function() {
+        const base64data = reader.result.split(',')[1]; // Loại bỏ tiền tố "data:audio/wav;base64,"
+        fetch('/api/whisper', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            audioData: base64data,
+            mimeType: audioBlob.type
+          })
+        })
+        .then(response => response.json())
+        .then(data => {
+          let transcript = data.text || '';
+          const cleanSentence = removeStressMarkers(sentence).toLowerCase().trim();
+          const cleanTranscript = transcript.toLowerCase().trim();
+          let feedback = `Bạn nói: "${transcript}"`;
+          if (cleanTranscript === cleanSentence) {
+            feedback += " - Tuyệt vời!";
+          } else {
+            feedback += " - Hãy thử lại.";
+          }
+          resultDiv.textContent = feedback;
+        })
+        .catch(err => {
+          resultDiv.textContent = "Lỗi: " + err.message;
+        });
+      };
+      reader.readAsDataURL(audioBlob);
+    }
+  </script>
+</body>
+</html>
